@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import random
+import time
+import sys
+
+# -------------------------------
+# Игровое состояние
+# -------------------------------
+class GameState:
+    def __init__(self):
+        self.honor = 40          # 0-100, Гонар
+        self.gold = 10           # Золото
+        self.peasants = 35       # Лояльность/благосостояние хлопцев (0-100)
+        self.renown = 5          # Влияние в шляхетских кругах
+        self.fencing = 30        # Навык фехтования (0-100)
+        self.drunk = 0           # Текущее опьянение (0-100)
+        self.alive = True
+        self.game_over = False
+        self.ending = ""
+
+        # Флаги сюжета
+        self.estate_recovered = False
+        self.burned_village = False
+        self.married_sister = False
+        self.first_duel_won = False
+        self.spared_opponent = False
+        self.veto_used = False
+        self.betrayed_king = False
+        self.saved_country = False
+
+state = GameState()
+
+# -------------------------------
+# Вспомогательные функции
+# -------------------------------
+def slow_print(text, delay=0.03):
+    for char in text:
+        sys.stdout.write(char)
+        sys.stdout.flush()
+        time.sleep(delay)
+    print()
+
+def get_choice(options):
+    """Выбор из пронумерованных вариантов"""
+    for i, opt in enumerate(options, 1):
+        print(f"{i}. {opt}")
+    while True:
+        try:
+            choice = int(input(">> "))
+            if 1 <= choice <= len(options):
+                return choice
+            else:
+                print("Неверный номер. Попробуй снова.")
+        except ValueError:
+            print("Введи число.")
+
+def stat_check(stat, threshold):
+    return getattr(state, stat) >= threshold
+
+def adjust_stat(stat, delta):
+    current = getattr(state, stat)
+    new_val = max(0, min(100, current + delta))
+    setattr(state, stat, new_val)
+
+def random_event(prob):
+    return random.random() < prob
+
+def duel(opponent_name, opponent_skill, can_flee=True):
+    """Дуэль. Возвращает True при победе."""
+    print(f"\n⚔️  Ты скрещиваешь сабли с {opponent_name}!")
+    player_roll = state.fencing + random.randint(-10, 10)
+    enemy_roll = opponent_skill + random.randint(-10, 10)
+    print(f"Твой бросок: {player_roll}, бросок противника: {enemy_roll}")
+    if player_roll > enemy_roll:
+        print("Ты одержал победу!")
+        adjust_stat("honor", 10)
+        adjust_stat("renown", 5)
+        return True
+    elif player_roll < enemy_roll:
+        print("Ты проиграл дуэль...")
+        adjust_stat("honor", -15)
+        if can_flee and random.random() < 0.6:
+            print("Тебе удалось выжить, но раны унизительны.")
+            adjust_stat("fencing", -5)
+            return False
+        else:
+            print("Удар оказался смертельным.")
+            state.alive = False
+            state.ending = "Погиб в бессмысленной дуэли, как истинный шляхтич."
+            return False
+    else:
+        print("Ничья! Противники разошлись с синяками и взаимным уважением.")
+        adjust_stat("honor", 5)
+        return None
+
+def apply_honor_duress():
+    """Если гонар слишком высок, принудительная дуэль."""
+    if state.honor > 80 and state.alive and not state.game_over:
+        print("\n💢 Твой высокий гонор не даёт спустить оскорбление даже от случайного прохожего!")
+        insult = random.choice([
+            "Какой-то пьяный шляхтич косо закрутил ус в твою сторону.",
+            "На рынке обозвали твой род «голодранцами».",
+            "Мелкий чиновник не поклонился тебе достаточно низко."
+        ])
+        print(insult)
+        choice = get_choice(["Вызвать на дуэль", "Проглотить обиду (потеря гонора)"])
+        if choice == 1:
+            opponent_skill = random.randint(20, 50)
+            duel("дерзким нахалом", opponent_skill)
+        else:
+            print("Ты стиснул зубы, но шляхта заметила твою слабость.")
+            adjust_stat("honor", -20)
+
+# -------------------------------
+# Мини-игра: Шляхетский банкет
+# -------------------------------
+def banquet():
+    print("\n🍷 Ты приглашён на шляхетский банкет. Столы ломятся от мёда и закусок.")
+    print("Нужно пить, не теряя лица, и попутно решить дела.")
+    rounds = 0
+    while state.alive and state.drunk < 80 and rounds < 5:
+        rounds += 1
+        print(f"\nРаунд {rounds}. Твоё опьянение: {state.drunk}%")
+        options = ["Провозгласить тост и выпить кубок", "Пригубить для вида", "Заняться закуской, пропуская тост"]
+        if state.drunk < 40:
+            options.append("Предложить политический союз (риск)")
+        choice = get_choice(options)
+        if choice == 1:
+            print("Ты лихо осушаешь кубок, гости одобрительно гудят.")
+            adjust_stat("drunk", random.randint(15, 25))
+            adjust_stat("honor", 5)
+        elif choice == 2:
+            print("Ты лишь делаешь вид, что пьёшь. Кое-кто косится, но не лезет.")
+            adjust_stat("drunk", 5)
+            adjust_stat("honor", -3)
+        elif choice == 3:
+            print("Пока другие пьют, ты активно жуёшь. Это мудро, но не героично.")
+            adjust_stat("drunk", -10)
+            adjust_stat("honor", -5)
+        elif choice == 4 and state.drunk < 40:
+            print("Ты пытаешься обсудить союз с соседом...")
+            if random.random() < 0.5 + (state.renown / 200):
+                print("Удалось! Ты заручился поддержкой.")
+                adjust_stat("renown", 10)
+                adjust_stat("honor", 5)
+            else:
+                print("Сосед лишь презрительно фыркнул: «Сначала научись пить, а потом лезь в политику!»")
+                adjust_stat("honor", -5)
+        if state.drunk >= 70:
+            print("\n⚠️ Ты уже изрядно пьян. Контроль слабеет.")
+            risky = random.random()
+            if risky < 0.4:
+                print("Ты чуть не зарезал лучшего друга в пьяной ссоре! С трудом удержался.")
+                adjust_stat("honor", -10)
+            elif risky < 0.7:
+                print("Ты начал орать пьяные куплеты. Гости хохочут, но запоминают.")
+                adjust_stat("renown", -2)
+            else:
+                print("Ты упал лицом в салат. Это запомнят надолго.")
+                adjust_stat("honor", -15)
+        if state.drunk >= 100:
+            break
+    if state.drunk >= 80:
+        print("\nТы напился до беспамятства. Слуги уносят тебя домой. Банкет окончен.")
+        adjust_stat("honor", -10)
+    else:
+        print("\nТы достойно выдержал банкет. Дела решены, честь не задета.")
+
+# -------------------------------
+# Акт 1: Наезды и суды
+# -------------------------------
+def act_one():
+    print("\n" + "="*60)
+    print("АКТ 1: НАЕЗДЫ И СУДЫ")
+    print("="*60)
+    slow_print("Ты — застенковый шляхтич. В наследство достались: сабля, драный жупан, конь и непомерный гонор.")
+    slow_print("Отец, упокой Господь его душу, проиграл последнюю деревеньку магнату пану Кривонюху.")
+    slow_print("Суд продажен, адвокаты сыты. Остаётся одно — наезд.")
+
+    # Сбор друзей
+    slow_print("\nТы собираешь местных голодранцев-шляхтичей. Пиво рекой, речи пламенные.")
+    if stat_check("gold", 5):
+        print("За свой скудный кошт ты покупаешь бочонок дешёвого пива.")
+        adjust_stat("gold", -5)
+    else:
+        print("Денег нет даже на пиво. Приходится пообещать долю с добычи — но это портит гонор.")
+        adjust_stat("honor", -5)
+    adjust_stat("renown", 2)
+
+    # Выбор тактики
+    print("\nВы приближаетесь к усадьбе Кривонюха.")
+    print("Что делать?")
+    choice = get_choice([
+        "Сжечь деревню дотла, показав силу",
+        "Попытаться договориться и выдать сестру за племянника магната"
+    ])
+    if choice == 1:
+        print("\n🔥 Твои люди поджигают хаты. Крики, дым, паника. Крестьяне в ужасе.")
+        adjust_stat("honor", 15)
+        adjust_stat("peasants", -20)
+        state.burned_village = True
+        print("Магнат в ярости, но его силы разбиты. Усадьба снова твоя!")
+        state.estate_recovered = True
+        adjust_stat("renown", 8)
+        adjust_stat("gold", 20)
+    else:
+        print("\n🤝 Ты предлагаешь мир: твоя сестра (пусть и страшна, как смертный грех) выходит за его племянника.")
+        print("Пан Кривонюх, скрепя сердце, соглашается. Породнились — теперь и землю возвращают.")
+        adjust_stat("honor", -5)
+        adjust_stat("peasants", 10)
+        state.married_sister = True
+        state.estate_recovered = True
+        adjust_stat("renown", 5)
+        adjust_stat("gold", 15)
+
+    # Первая дуэль
+    print("\nНа рыночной площади какой-то хам косо посмотрел на тебя и отпустил шутку про твои усы.")
+    print("Весь рынок смотрит.")
+    duel_choice = get_choice(["Вызвать наглеца на дуэль", "Смолчать, хотя честь страдает"])
+    if duel_choice == 1:
+        opponent_skill = random.randint(25, 40)
+        result = duel("незнакомцем", opponent_skill, can_flee=True)
+        if result:
+            state.first_duel_won = True
+            print("Ты навсегда закрепил уважение на рынке.")
+        elif result is False:
+            print("Рынок запомнит твоё поражение.")
+    else:
+        print("Ты проглотил обиду. Шляхтичи переглянулись — гонор не тот.")
+        adjust_stat("honor", -15)
+    apply_honor_duress()
+
+# -------------------------------
+# Акт 2: Сеймики и Liberum Veto
+# -------------------------------
+def act_two():
+    print("\n" + "="*60)
+    print("АКТ 2: СЕЙМИКИ И ЗОЛОТАЯ ВОЛЬНОСТЬ")
+    print("="*60)
+    slow_print("Земля вернулась, уважение растёт. Пора в политику — на местный сеймик.")
+    slow_print("Здесь выбирают депутатов на Главный Сейм, и здесь кипит хаос.")
+
+    print("\nТы приезжаешь на сеймик. Зал гудит, магнаты подкупают голоса, голытьба рада любому золотому.")
+    print("Твоя цель — протолкнуть выгодное для тебя решение.")
+
+    # Банкет перед дебатами
+    print("\nПервым делом — пир для «своих». Ты устраиваешь шляхетский банкет.")
+    banquet()
+    if not state.alive:
+        return
+
+    # Политические интриги
+    print("\nНачинаются дебаты. Магнат Островский предлагает закон, ущемляющий твои права на лес.")
+    print("Что будешь делать?")
+    choice = get_choice([
+        "Подкупить десяток безземельных шляхтичей (золото -15)",
+        "Произнести пламенную речь на латыни",
+        "Использовать Liberum Veto!"
+    ])
+    if choice == 1:
+        if state.gold >= 15:
+            adjust_stat("gold", -15)
+            print("Ты раздаёшь золотые монеты голодранцам, они голосуют как тебе нужно.")
+            adjust_stat("renown", 10)
+        else:
+            print("Золота не хватает! Ты выглядишь жалко.")
+            adjust_stat("honor", -10)
+    elif choice == 2:
+        print("Ты встаёшь и произносишь речь, смешивая латынь с просторечием.")
+        if random.random() < 0.5 + (state.renown / 100):
+            print("Зал взрывается одобрительными криками! Ты перетянул голоса.")
+            adjust_stat("renown", 15)
+            adjust_stat("honor", 5)
+        else:
+            print("Тебя высмеивают за плохое произношение. Политика — жестокая штука.")
+            adjust_stat("honor", -5)
+    else:
+        print("\n🚫 Ты встаёшь и орёшь: «NIE POZWALAM!» (Не позволям!)")
+        print("В зале воцаряется гробовая тишина. А потом начинается драка.")
+        state.veto_used = True
+        adjust_stat("renown", 20)
+        adjust_stat("honor", 25)
+        # Покушение
+        print("К тебе кидаются люди магната с саблями. Придётся отбиваться!")
+        opponent_skill = random.randint(35, 55)
+        result = duel("наёмным убийцей", opponent_skill, can_flee=True)
+        if not state.alive:
+            return
+        if result:
+            print("Ты вышел из схватки героем. Сейм сорван, ты — легенда!")
+        else:
+            print("Ты уцелел, но репутация подмочена.")
+            adjust_stat("honor", -10)
+    apply_honor_duress()
+    # Проверка крестьян
+    if state.peasants < 20:
+        print("\n⚠️ Твои хлопцы совсем обнищали. По усадьбе бродят слухи о бунте.")
+        choice = get_choice(["Ужесточить панщину (собрать золото)", "Пойти на уступки, снизить налоги"])
+        if choice == 1:
+            adjust_stat("gold", 20)
+            adjust_stat("peasants", -15)
+            print("Ты выжал из крестьян последнее. В воздухе пахнет восстанием...")
+        else:
+            adjust_stat("gold", -5)
+            adjust_stat("peasants", 15)
+            print("Хлопцы немного повеселели. Может, обойдётся.")
+
+# -------------------------------
+# Акт 3: Потоп и Рокош
+# -------------------------------
+def act_three():
+    print("\n" + "="*60)
+    print("АКТ 3: ПОТОП И РОКОШ")
+    print("="*60)
+    slow_print("На Речь Посполитую нападают со всех сторон: шведы, казаки, московские полки.")
+    slow_print("Король призывает шляхту к обороне, но магнаты поднимают рокош — законное восстание против короля, поправшего вольности.")
+    slow_print("Время сделать выбор.")
+
+    print("\nК тебе приходят послы от обоих лагерей.")
+    print("1. Присягнуть шведам — обещают новые земли и гетманскую булаву.")
+    print("2. Остаться с королём — защищать страну, даже если он не благодарит.")
+    print("3. Поднять своих людей и просто грабить всех подряд (анархия).")
+    choice = get_choice(["Присягнуть шведам", "Верность королю", "Грабёж и анархия"])
+    if choice == 1:
+        state.betrayed_king = True
+        print("\nТы становишься на сторону захватчиков. Шведский командор дарит тебе богатый кунтуш и обещает воеводство.")
+        adjust_stat("gold", 50)
+        adjust_stat("renown", 30)
+        adjust_stat("honor", -20)
+        print("Но многие старые друзья отвернулись от тебя. Зато у тебя теперь наёмное войско.")
+        # Финальная битва
+        print("\nТы ведёшь шведов на Варшаву. Столица горит.")
+        print("Магнаты рокопа сражаются отчаянно, но ты — сила.")
+        enemy_skill = 60
+        result = duel("гетманом коронным", enemy_skill, can_flee=False)
+        if state.alive:
+            print("\nТы победил. Ты — новый гетман, но страна лежит в руинах.")
+            state.ending = "Ты стал великим предателем. Через 50 лет соседи разделят Польшу, а твой род проклянут."
+        else:
+            state.ending = "Ты пал в битве за шведское золото. История запомнит тебя как предателя."
+    elif choice == 2:
+        state.saved_country = True
+        print("\nТы объявляешь мобилизацию. Шляхта стекается под твои знамёна, ведь гонор не позволяет терпеть захватчиков.")
+        adjust_stat("honor", 15)
+        adjust_stat("renown", 20)
+        print("Ты участвуешь в решающей битве против шведов под Варшавой.")
+        # Битва
+        battle_result = random.randint(1, 100) + (state.fencing // 2) + (state.renown // 2)
+        if battle_result > 90:
+            print("Разгром! Враги бегут. Король лично жмёт тебе руку.")
+            adjust_stat("renown", 30)
+        else:
+            print("Тяжёлая битва, но вы отстояли столицу. Хотя поля усеяны трупами.")
+            adjust_stat("honor", 5)
+        # Рокош
+        print("\nНо король усиливает налоги. Магнаты ропщут. Что делать?")
+        choice = get_choice(["Поддержать короля", "Примкнуть к рокошу (законно восстать)"])
+        if choice == 1:
+            print("Ты остаёшься верным короне. Магнаты разбиты, страна формально цела, но экономика в пропасти.")
+            state.ending = "Ты спас страну как мог, но своими руками закрепил систему, которая приведёт к разделам. Зато ты — сенатор и живёшь в почёте."
+        else:
+            print("Ты кричишь «Не позволям!» и ведёшь рокош. Король отступает, золотая вольность торжествует.")
+            adjust_stat("honor", 20)
+            state.ending = "Ты развалил центральную власть. Через полвека соседи растащат Речь Посполитую, а ты умрёшь от цирроза печени, но с сознанием, что гулял красиво."
+    else:
+        print("\nТы плюёшь на всех и начинаешь грабить окрестности.")
+        adjust_stat("honor", -30)
+        adjust_stat("gold", 30)
+        print("Крестьяне бегут, шляхта объединяется против тебя. Рано или поздно тебя поймают.")
+        if random.random() < 0.5:
+            print("Тебя расстреливают свои же. Конец.")
+            state.alive = False
+            state.ending = "Умер как разбойник, забытый всеми."
+        else:
+            print("Тебе удаётся бежать за границу с мешком золота. Живёшь в безвестности.")
+            state.ending = "Ты сбежал, бросив всё. Ни чести, ни родины, только золото."
+    # Крестьянский бунт
+    if state.peasants <= 10 and state.alive:
+        print("\n🔥 Твои крестьяне, доведённые до отчаяния, поджигают усадьбу!")
+        if random.random() < 0.5:
+            print("Ты успеваешь сбежать. Теперь ты безземельный шляхтич-изгой.")
+            state.ending = "Крестьяне сожгли твой дом. Ты закончил жизнь в нищете."
+            state.alive = False
+        else:
+            print("Они врываются в твои покои...")
+            state.alive = False
+            state.ending = "Убит собственными хлопцами. Гонор не спас."
+
+# -------------------------------
+# Эпилог
+# -------------------------------
+def epilogue():
+    if not state.alive:
+        print("\n💀 Ты мёртв.")
+    else:
+        print("\n🏁 Игра окончена.")
+    print("="*40)
+    print("ИТОГИ:")
+    print(f"Гонар: {state.honor}")
+    print(f"Золото: {state.gold}")
+    print(f"Влияние: {state.renown}")
+    print(f"Настроение хлопцев: {state.peasants}")
+    print(f"Мастерство сабли: {state.fencing}")
+    print("\n" + state.ending)
+    print("="*40)
+
+# -------------------------------
+# Главная функция
+# -------------------------------
+def main():
+    print("♜  ГОНАР (ЧЕСТЬ)  ♜")
+    print("Из грязи в... шляхту.\n")
+    slow_print("Ты — захудалый шляхтич. Отец мёртв, земля в чужих руках. У тебя есть только сабля и гонор.")
+    slow_print("Верни своё, заставь всех уважать твой род, а там — как карта ляжет.\n")
+    input("Нажми Enter, чтобы начать...")
+
+    # Акт 1
+    act_one()
+    if not state.alive:
+        epilogue()
+        return
+
+    # Акт 2
+    act_two()
+    if not state.alive:
+        epilogue()
+        return
+
+    # Акт 3
+    act_three()
+    epilogue()
+
+if __name__ == "__main__":
+    main()
