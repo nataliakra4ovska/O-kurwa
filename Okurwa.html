@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Гонар: 2D-бродилка</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+    <style>
+        body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background: #1a1a1a; }
+    </style>
+</head>
+<body>
+<script>
+// ---------- Глобальное состояние игры ----------
+const gameState = {
+    honor: 50,
+    gold: 10,
+    questAccepted: false,
+    questCompleted: false
+};
+
+// ---------- Сцена загрузки ----------
+class BootScene extends Phaser.Scene {
+    constructor() { super('Boot'); }
+    create() {
+        // Программно создаём текстуры 32x32
+        const gr = this.make.graphics({ add: false });
+        gr.fillStyle(0x228B22); gr.fillRect(0,0,32,32); gr.generateTexture('grass', 32,32);
+        gr.clear(); gr.fillStyle(0x1E90FF); gr.fillRect(0,0,32,32); gr.generateTexture('water', 32,32);
+        gr.clear(); gr.fillStyle(0x8B4513); gr.fillRect(0,0,32,32); gr.generateTexture('wood', 32,32);
+        gr.clear(); gr.fillStyle(0xFFD700); gr.fillRect(0,0,32,32); gr.generateTexture('player', 32,32);
+        gr.clear(); gr.fillStyle(0xFF6347); gr.fillRect(0,0,32,32); gr.generateTexture('npc', 32,32);
+        gr.clear(); gr.fillStyle(0x8A2BE2); gr.fillRect(0,0,32,32); gr.generateTexture('magnate', 32,32);
+        gr.destroy();
+        this.scene.start('Menu');
+    }
+}
+
+// ---------- Главное меню ----------
+class MenuScene extends Phaser.Scene {
+    constructor() { super('Menu'); }
+    create() {
+        this.add.text(400, 200, 'ГОНАР', { fontSize: '48px', fill: '#fff' }).setOrigin(0.5);
+        this.add.text(400, 260, 'Из грязи в шляхту', { fontSize: '20px', fill: '#aaa' }).setOrigin(0.5);
+        const btn = this.add.text(400, 400, 'Начать игру', { fontSize: '28px', fill: '#ff0' })
+            .setOrigin(0.5).setInteractive();
+        btn.on('pointerdown', () => this.scene.start('World'));
+        this.input.keyboard.on('keydown-ENTER', () => this.scene.start('World'));
+    }
+}
+
+// ---------- Основной мир ----------
+class WorldScene extends Phaser.Scene {
+    constructor() { super('World'); }
+
+    create() {
+        // --- Карта 25x19 тайлов ---
+        this.tileSize = 32;
+        this.mapWidth = 25;
+        this.mapHeight = 19;
+        this.mapTiles = [];  // храним тип тайла
+        for (let y = 0; y < this.mapHeight; y++) {
+            this.mapTiles[y] = [];
+            for (let x = 0; x < this.mapWidth; x++) {
+                // 0-трава, 1-вода, 2-лес
+                if (x === 0 || y === 0 || x === this.mapWidth-1 || y === this.mapHeight-1) {
+                    this.mapTiles[y][x] = 1; // вода по краям
+                } else if (Math.random() < 0.08) {
+                    this.mapTiles[y][x] = 2; // редкий лес
+                } else {
+                    this.mapTiles[y][x] = 0;
+                }
+                // Отрисовка
+                const img = this.mapTiles[y][x] === 0 ? 'grass' : (this.mapTiles[y][x] === 1 ? 'water' : 'wood');
+                this.add.image(x * this.tileSize + this.tileSize/2, y * this.tileSize + this.tileSize/2, img);
+            }
+        }
+        // Полянка для игрока и NPC
+        this.mapTiles[2][2] = 0; this.mapTiles[2][3] = 0; this.mapTiles[3][2] = 0;
+        this.mapTiles[16][21] = 0; this.mapTiles[16][20] = 0; this.mapTiles[15][21] = 0;
+
+        // --- Игрок ---
+        this.player = this.add.image(2 * this.tileSize + 16, 3 * this.tileSize + 16, 'player').setDepth(2);
+        this.playerSpeed = 140;
+
+        // --- NPC ---
+        this.npcHelper = this.add.image(6 * this.tileSize + 16, 3 * this.tileSize + 16, 'npc').setDepth(2);
+        this.npcHelper.info = { name: 'Пан Збигнев', text: 'Верни мою усадьбу! Магнат Кривонюх на северо-востоке.' };
+        this.magnate = this.add.image(21 * this.tileSize + 16, 15 * this.tileSize + 16, 'magnate').setDepth(2);
+        this.magnate.info = { name: 'Магнат Кривонюх', text: 'Ты бросил мне вызов?' };
+
+        // --- Интерфейс ---
+        this.honorText = this.add.text(10, 10, `Гонар: ${gameState.honor}`, { fontSize: '18px', fill: '#fff' }).setDepth(10);
+        this.goldText = this.add.text(10, 32, `Золото: ${gameState.gold}`, { fontSize: '18px', fill: '#ff0' }).setDepth(10);
+        this.questText = this.add.text(400, 10, '', { fontSize: '16px', fill: '#0ff' }).setOrigin(0.5, 0).setDepth(10);
+
+        // --- Диалоговая система ---
+        this.dialogOpen = false;
+        this.dialogContainer = this.add.container(400, 500).setDepth(20).setVisible(false);
+        const bg = this.add.rectangle(0, 0, 780, 100, 0x000000, 0.85);
+        this.dialogMsg = this.add.text(0, -20, '', { fontSize: '16px', fill: '#fff', wordWrap: { width: 720 }, align: 'center' }).setOrigin(0.5);
+        this.dialogChoice = this.add.text(0, 30, '', { fontSize: '14px', fill: '#aaa' }).setOrigin(0.5);
+        this.dialogContainer.add([bg, this.dialogMsg, this.dialogChoice]);
+
+        // --- Управление ---
+        this.cursors = this.input.keyboard.createCursorKeys();
+        this.enterKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
+        this.keyY = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Y);
+        this.keyN = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.N);
+
+        // --- Дуэль ---
+        this.duelActive = false;
+        this.duelTimer = 0;
+        this.duelPresses = 0;
+        this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    }
+
+    update(time, delta) {
+        if (this.duelActive) {
+            this.updateDuel(time, delta);
+            return;
+        }
+        if (this.dialogOpen) return;
+
+        // Движение игрока
+        let dx = 0, dy = 0;
+        if (this.cursors.left.isDown) dx = -1;
+        else if (this.cursors.right.isDown) dx = 1;
+        if (this.cursors.up.isDown) dy = -1;
+        else if (this.cursors.down.isDown) dy = 1;
+
+        if (dx !== 0 || dy !== 0) {
+            const newX = this.player.x + dx * this.playerSpeed * delta / 1000;
+            const newY = this.player.y + dy * this.playerSpeed * delta / 1000;
+            // Проверяем тайл под ногами (центр)
+            const tileX = Math.floor(newX / this.tileSize);
+            const tileY = Math.floor(newY / this.tileSize);
+            if (tileX >= 0 && tileX < this.mapWidth && tileY >= 0 && tileY < this.mapHeight) {
+                const tile = this.mapTiles[tileY][tileX];
+                if (tile === 0) { // только трава проходима
+                    this.player.x = newX;
+                    this.player.y = newY;
+                }
+            }
+        }
+
+        // Проверка близости к NPC
+        this.checkInteraction(this.npcHelper, 'helper');
+        this.checkInteraction(this.magnate, 'magnate');
+    }
+
+    checkInteraction(npc, type) {
+        const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, npc.x, npc.y);
+        if (dist < 35) {
+            this.openDialog(type);
+        }
+    }
+
+    openDialog(type) {
+        this.dialogOpen = true;
+        let msg = '';
+        let choice = 'Нажми Enter';
+        this.currentDialogType = type;
+
+        if (type === 'helper') {
+            if (!gameState.questAccepted) {
+                msg = `${this.npcHelper.info.name}: ${this.npcHelper.info.text}`;
+                choice = 'Y - принять квест, N - отказаться';
+            } else if (gameState.questCompleted) {
+                msg = `${this.npcHelper.info.name}: Слава герою! Ты вернул усадьбу!`;
+            } else {
+                msg = `${this.npcHelper.info.name}: Победи магната! Он на северо-востоке.`;
+            }
+        } else if (type === 'magnate') {
+            if (gameState.questAccepted && !gameState.questCompleted) {
+                msg = `${this.magnate.info.name}: ${this.magnate.info.text} (нажми Enter для дуэли)`;
+            } else if (gameState.questCompleted) {
+                msg = `${this.magnate.info.name}: Ты уже победил меня...`;
+            } else {
+                msg = `${this.magnate.info.name}: Убирайся, голодранец!`;
+            }
+        }
+
+        this.dialogMsg.setText(msg);
+        this.dialogChoice.setText(choice);
+        this.dialogContainer.setVisible(true);
+
+        // Обработчики ввода
+        this.input.keyboard.once('keydown-ENTER', () => {
+            if (type === 'magnate' && gameState.questAccepted && !gameState.questCompleted) {
+                this.dialogContainer.setVisible(false);
+                this.dialogOpen = false;
+                this.startDuel();
+            } else {
+                this.closeDialog();
+            }
+        });
+        if (type === 'helper' && !gameState.questAccepted) {
+            this.input.keyboard.once('keydown-Y', () => {
+                gameState.questAccepted = true;
+                this.questText.setText('Квест: Победи магната!');
+                this.closeDialog();
+            });
+            this.input.keyboard.once('keydown-N', () => {
+                this.closeDialog();
+            });
+        }
+    }
+
+    closeDialog() {
+        this.dialogContainer.setVisible(false);
+        this.dialogOpen = false;
+        // Удаляем старые одноразовые слушатели (Phaser сам очистит once, но лучше перестраховаться)
+    }
+
+    startDuel() {
+        this.duelActive = true;
+        this.duelTimer = 0;
+        this.duelPresses = 0;
+        this.duelText = this.add.text(400, 280, 'ДУЭЛЬ! Жми ПРОБЕЛ! (3 сек)', { fontSize: '26px', fill: '#f00' }).setOrigin(0.5).setDepth(30);
+    }
+
+    updateDuel(time, delta) {
+        this.duelTimer += delta;
+        if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+            this.duelPresses++;
+        }
+        if (this.duelTimer >= 3000) {
+            this.duelActive = false;
+            this.duelText.destroy();
+            let result = '';
+            if (this.duelPresses >= 10) {
+                gameState.questCompleted = true;
+                gameState.honor += 20;
+                gameState.gold += 15;
+                result = 'Победа!';
+                this.questText.setText('Квест выполнен!');
+            } else {
+                gameState.honor -= 15;
+                result = 'Поражение...';
+                if (gameState.honor <= 0) {
+                    result += ' Гонар упал до нуля. Игра окончена.';
+                }
+            }
+            this.honorText.setText(`Гонар: ${gameState.honor}`);
+            this.goldText.setText(`Золото: ${gameState.gold}`);
+            this.add.text(400, 350, result, { fontSize: '28px', fill: '#fff' }).setOrigin(0.5).setDepth(30);
+            if (gameState.honor <= 0) {
+                this.time.delayedCall(3000, () => this.scene.start('Menu'));
+            }
+        }
+    }
+}
+
+// ---------- Конфигурация игры ----------
+const config = {
+    type: Phaser.AUTO,
+    width: 800,
+    height: 608, // 19*32 = 608
+    backgroundColor: '#111',
+    scene: [BootScene, MenuScene, WorldScene],
+    parent: 'game-container'
+};
+const game = new Phaser.Game(config);
+</script>
+</body>
+</html>
